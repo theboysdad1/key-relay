@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://ogjiykncltyezwtfhnau.supabase.co">
+<title>Key Relay</title>
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --text:#1d1d1f; --muted:#6b6b70; --line:#dcdad5; --accent:#2f5bd3; --ok:#1f7a45; --err:#b3261e; color-scheme: light; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141416; --card:#1e1e21; --text:#ececee; --muted:#9a9aa1; --line:#34343a; --accent:#7d9cff; --ok:#5fcf8f; --err:#ff8a80; color-scheme: dark; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; padding:24px 16px; }
+  main { max-width:420px; margin:0 auto; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:22px; }
+  h1 { font-size:1.3rem; margin:0 0 4px; }
+  p.sub { margin:0 0 18px; color:var(--muted); font-size:.92rem; }
+  label { display:block; font-weight:600; font-size:.9rem; margin:14px 0 6px; }
+  input { width:100%; font:inherit; padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--text); }
+  input:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  .row { display:flex; gap:8px; align-items:center; margin-top:8px; font-size:.88rem; color:var(--muted); }
+  button { width:100%; margin-top:20px; font:inherit; font-weight:600; padding:13px; border:0; border-radius:10px; background:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; }
+  #pc { font-size:.85rem; color:var(--muted); margin-bottom:6px; }
+  #msg { margin-top:16px; font-size:.95rem; min-height:1.4em; }
+  .ok { color:var(--ok); } .err { color:var(--err); }
+  .fine { margin-top:18px; font-size:.8rem; color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Key Relay</h1>
+  <p class="sub">Send your WaveSpeed API key to your PC.</p>
+  <div id="pc">Checking your PC…</div>
+
+  <form id="f" autocomplete="off">
+    <label for="pass">Passcode</label>
+    <input id="pass" inputmode="text" autocapitalize="off" spellcheck="false" placeholder="xxxx-xxxx-xxxx" required>
+
+    <label for="key">WaveSpeed API key</label>
+    <input id="key" type="password" autocapitalize="off" spellcheck="false" required>
+    <div class="row"><input id="show" type="checkbox" style="width:auto"><label for="show" style="margin:0;font-weight:400">Show key</label></div>
+
+    <button id="go" type="submit">Send to PC</button>
+  </form>
+  <div id="msg" role="status"></div>
+  <p class="fine">Your key is encrypted on this phone before it is sent. Only your PC can unlock it.</p>
+</main>
+<script>
+const API = 'https://ogjiykncltyezwtfhnau.supabase.co/functions/v1/key-relay';
+const $ = (id) => document.getElementById(id);
+const say = (t, cls) => { $('msg').textContent = t; $('msg').className = cls || ''; };
+
+async function call(body) {
+  const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+function ago(iso) {
+  if (!iso) return 'never';
+  const s = Math.round((Date.now() - new Date(iso)) / 1000);
+  if (s < 90) return s + ' seconds ago';
+  if (s < 5400) return Math.round(s / 60) + ' minutes ago';
+  return Math.round(s / 3600) + ' hours ago';
+}
+
+let pub = null;
+async function load() {
+  try {
+    const j = await call({ action: 'pubkey' });
+    pub = j.public_key;
+    const fresh = j.pc_last_seen && (Date.now() - new Date(j.pc_last_seen)) < 120000;
+    $('pc').textContent = 'PC last checked in: ' + ago(j.pc_last_seen) + (fresh ? ' ✓ listening' : ' (agent may not be running)');
+  } catch (e) {
+    $('pc').textContent = 'Could not reach relay: ' + e.message;
+  }
+}
+
+$('show').addEventListener('change', () => { $('key').type = $('show').checked ? 'text' : 'password'; });
+
+$('f').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const value = $('key').value.trim();
+  if (!pub) return say('PC public key not loaded yet. Refresh and try again.', 'err');
+  if (!value || /\s/.test(value)) return say('That key looks empty or has spaces.', 'err');
+  $('go').disabled = true; say('Encrypting and sending…');
+  try {
+    const k = await crypto.subtle.importKey('jwk', pub, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']);
+    const data = new TextEncoder().encode(JSON.stringify({ name: 'WAVESPEED_API_KEY', value }));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, k, data));
+    let bin = ''; ct.forEach((b) => bin += String.fromCharCode(b));
+    await call({ action: 'submit', passcode: $('pass').value.trim().toLowerCase(), ciphertext: btoa(bin) });
+    $('key').value = '';
+    say('Sent ✓ Your PC should pick it up within about 20 seconds.', 'ok');
+  } catch (e) {
+    say('Failed: ' + e.message, 'err');
+  } finally {
+    $('go').disabled = false;
+  }
+});
+
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>
