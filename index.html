@@ -29,14 +29,17 @@
 <body>
 <main>
   <h1>Key Relay</h1>
-  <p class="sub">Send your WaveSpeed API key to your PC.</p>
+  <p class="sub">Send an API key to your PC.</p>
   <div id="pc">Checking your PC…</div>
 
   <form id="f" autocomplete="off">
     <label for="pass">Passcode</label>
     <input id="pass" inputmode="text" autocapitalize="off" spellcheck="false" placeholder="xxxx-xxxx-xxxx" required>
 
-    <label for="key">WaveSpeed API key</label>
+    <label for="name">Key name</label>
+    <input id="name" autocapitalize="characters" spellcheck="false" value="WAVESPEED_API_KEY" required>
+
+    <label for="key">API key</label>
     <input id="key" type="password" autocapitalize="off" spellcheck="false" required>
     <div class="row"><input id="show" type="checkbox" style="width:auto"><label for="show" style="margin:0;font-weight:400">Show key</label></div>
 
@@ -83,11 +86,13 @@ $('f').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const value = $('key').value.trim();
   if (!pub) return say('PC public key not loaded yet. Refresh and try again.', 'err');
+  const name = $('name').value.trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9_]{1,60}_(API_KEY|KEY|TOKEN)$/.test(name)) return say('Key name must end in _API_KEY, _KEY or _TOKEN.', 'err');
   if (!value || /\s/.test(value)) return say('That key looks empty or has spaces.', 'err');
   $('go').disabled = true; say('Encrypting and sending…');
   try {
     const k = await crypto.subtle.importKey('jwk', pub, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']);
-    const data = new TextEncoder().encode(JSON.stringify({ name: 'WAVESPEED_API_KEY', value }));
+    const data = new TextEncoder().encode(JSON.stringify({ name, value }));
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, k, data));
     let bin = ''; ct.forEach((b) => bin += String.fromCharCode(b));
     await call({ action: 'submit', passcode: $('pass').value.trim().toLowerCase(), ciphertext: btoa(bin) });
